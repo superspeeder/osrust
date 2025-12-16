@@ -6,13 +6,14 @@ pub mod debug_utils;
 
 pub mod interrupts;
 pub mod gdt;
+pub mod paging;
 
 pub fn init() {
     // TODO: figure out how to make entering this gdt *not* trigger a gpf
     // gdt::init();
-    // paging::init();
+    paging::init();
     interrupts::init_idt();
     interrupts::init_pics();
-    // interrupts::pit::init();
+    interrupts::pit::init();
     x86_64::instructions::interrupts::enable();
 }
