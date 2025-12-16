@@ -3,6 +3,7 @@ pub mod pit;
 use crate::{gdt, println};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
+use x86_64::instructions::hlt;
 use x86_64::instructions::port::PortWrite;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
@@ -69,6 +70,9 @@ extern "x86-interrupt" fn page_fault_handler(
     error_code: PageFaultErrorCode,
 ) {
     println!("EXCEPTION: PAGE FAULT\n{:#?}", stack_frame);
+    loop {
+        hlt();
+    }
 }
 
 extern "x86-interrupt" fn gpf_handler(
@@ -76,6 +80,9 @@ extern "x86-interrupt" fn gpf_handler(
     error_code: u64,
 ) {
     println!("EXCEPTION: GENERAL PROTECTION FAULT\n{:#?}", stack_frame);
+    loop {
+        hlt();
+    }
 }
 
 extern "x86-interrupt" fn double_fault_handler(
@@ -96,8 +103,6 @@ impl InterruptIndex {
 }
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    print!(".");
-
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());

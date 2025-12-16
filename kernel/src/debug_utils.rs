@@ -38,8 +38,8 @@ macro_rules! print {
 
 #[macro_export]
 macro_rules! println {
-    () => (print!("\n"));
-    ($($arg:tt)*) => (print!("{}\n", format_args!($($arg)*)));
+    () => ($crate::debug_utils::_print("\n"));
+    ($($arg:tt)*) => ($crate::debug_utils::_println(format_args!($($arg)*)));
 }
 
 #[doc(hidden)]
@@ -48,3 +48,11 @@ pub fn _print(args: core::fmt::Arguments) {
     SERIAL.lock().write_fmt(args).unwrap();
 }
 
+
+#[doc(hidden)]
+pub fn _println(args: core::fmt::Arguments) {
+    use core::fmt::Write;
+    let mut serial = SERIAL.lock();
+    serial.write_fmt(args).unwrap();
+    serial.write_char('\n').unwrap();
+}
