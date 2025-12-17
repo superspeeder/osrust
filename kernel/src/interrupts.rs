@@ -47,8 +47,8 @@ pub fn init_idt() {
     info!("Initialized IDT");
 }
 
-pub fn init_pics() {
-    unsafe { PICS.lock().initialize() };
+pub fn disable_8259_pic() {
+    unsafe { PICS.lock().disable() };
     // unsafe {
     //     u8::write_to_port(0x20, 0x11);
     //     u8::write_to_port(0xA0, 0x11);
@@ -61,7 +61,11 @@ pub fn init_pics() {
     //     u8::write_to_port(0x21, 0x0);
     //     u8::write_to_port(0xA1, 0x0);
     // }
-    info!("Mapped PIC");
+    info!("Disabled 8259 PIC");
+}
+
+pub fn init_apic() {
+    // acpi::
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {

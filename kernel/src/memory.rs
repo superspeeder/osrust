@@ -13,6 +13,11 @@ static mut PHYSICAL_OFFSET: VirtAddr = VirtAddr::new(0);
 static mut PAGE_TABLE: Option<OffsetPageTable<'static>> = None;
 static mut FRAME_ALLOCATOR: Option<BootInfoFrameAllocator> = None;
 
+// This is an invalid address since this is not a canonical address and has enough free space in its address space to withstand an offset without an integer overflow.
+// This address should theoretically never be mapped which is the only reason this is safe to use as an error.
+// When used in the kernel, this address will cause the kernel to panic.
+pub const ERROR_ADDRESS: u64 = (!0u64) ^ (1 << 63 | 0x00FF_FFFF_FFFF);
+
 pub fn mapper() -> &'static mut OffsetPageTable<'static> {
     unsafe { PAGE_TABLE.as_mut().unwrap() }
 }

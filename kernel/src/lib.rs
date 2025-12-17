@@ -18,6 +18,7 @@ pub mod interrupts;
 mod logger;
 pub mod memory;
 pub mod allocator;
+pub mod support;
 
 pub fn init(boot_info: &'static BootInfo) {
     unsafe { log::set_logger_racy(&logger::LOGGER).expect("Failed to configure logger") };
@@ -26,15 +27,18 @@ pub fn init(boot_info: &'static BootInfo) {
     info!("Initialized Logger");
 
     gdt::init();
+    memory::init(boot_info);
+    allocator::init_heap(memory::mapper(), memory::frame_allocator()).expect("Failed to initialize heap");
+    acpi::init(boot_info);
+
     interrupts::init_idt();
-    interrupts::init_pics();
+    interrupts::disable_8259_pic();
+    acpi::setup_apic();
+    acpi::setup_hpet();
     interrupts::pit::init();
     x86_64::instructions::interrupts::enable();
 
-    memory::init(boot_info);
-    allocator::init_heap(memory::mapper(), memory::frame_allocator());
 
-    acpi::init(boot_info);
 
     info!("Kernel initialized");
 }

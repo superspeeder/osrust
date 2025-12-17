@@ -13,9 +13,10 @@ bootloader_api = "0.11.13"
 uart_16550 = "0.4.0"
 x86_64 = "0.15.2"
 lazy_static = { version = "1.5.0", default-features = false, features = ["spin_no_std"] }
-spin = { version = "0.10.0", default-features = false, features = ["spin_mutex"]}
+spin = { version = "0.10.0", default-features = false, features = ["spin_mutex"] }
 pic8259 = "0.11.0"
 bytemuck = { version = "1.24.0", features = ["derive"] }
 acpi = { version = "6.0.1" }
 log = "0.4.29"
 linked_list_allocator = "0.10.5"
+bitflags = { version = "2.10.0", default-features = false, features = ["bytemuck"] }
