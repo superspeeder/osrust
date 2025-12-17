@@ -1,20 +1,31 @@
 #![feature(abi_x86_interrupt)]
+#![feature(stmt_expr_attributes)]
 #![no_std] // don't link the Rust standard library
 
-use bootloader_api::BootInfo;
 use crate::memory::BootInfoFrameAllocator;
+use bootloader_api::BootInfo;
+use x86_64::structures::paging::OffsetPageTable;
 
 #[macro_use]
 pub mod debug_utils;
 
-pub mod interrupts;
-pub mod gdt;
-pub mod memory;
 pub mod acpi;
+pub mod binutil;
+pub mod gdt;
+pub mod interrupts;
+pub mod memory;
 
 static mut FRAME_ALLOCATOR: Option<BootInfoFrameAllocator> = None;
+static mut MAPPER: Option<OffsetPageTable> = None;
 
-pub fn init(boot_info: &BootInfo) {
+fn init_memory(boot_info: &'static BootInfo) {
+    unsafe {
+        MAPPER = Some(memory::init(boot_info));
+        FRAME_ALLOCATOR = Some(BootInfoFrameAllocator::init(&boot_info.memory_regions));
+    }
+}
+
+pub fn init(boot_info: &'static BootInfo) {
     // TODO: figure out how to make entering this gdt *not* trigger a gpf
     // gdt::init();
     interrupts::init_idt();
@@ -22,12 +33,6 @@ pub fn init(boot_info: &BootInfo) {
     interrupts::pit::init();
     x86_64::instructions::interrupts::enable();
 
-    let mut mapper = unsafe { memory::init(boot_info) };
-    let mut frame_allocator = unsafe {
-        BootInfoFrameAllocator::init(&boot_info.memory_regions)
-    };
-    unsafe {
-        FRAME_ALLOCATOR = Some(frame_allocator);
-    }
+    init_memory(boot_info);
+    acpi::init(boot_info);
 }
-

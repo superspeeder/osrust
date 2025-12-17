@@ -1,10 +1,10 @@
 pub mod pit;
 
-use crate::{gdt, println};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use x86_64::instructions::hlt;
 use x86_64::instructions::port::PortWrite;
+use x86_64::registers::control::Cr2;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
 #[derive(Debug, Clone, Copy)]
@@ -67,9 +67,9 @@ extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
 
 extern "x86-interrupt" fn page_fault_handler(
     stack_frame: InterruptStackFrame,
-    error_code: PageFaultErrorCode,
+    _error_code: PageFaultErrorCode,
 ) {
-    println!("EXCEPTION: PAGE FAULT\n{:#?}", stack_frame);
+    println!("EXCEPTION: PAGE FAULT AT 0x{:016X}\n{:#?}", Cr2::read_raw(), stack_frame);
     loop {
         hlt();
     }
@@ -77,7 +77,7 @@ extern "x86-interrupt" fn page_fault_handler(
 
 extern "x86-interrupt" fn gpf_handler(
     stack_frame: InterruptStackFrame,
-    error_code: u64,
+    _error_code: u64,
 ) {
     println!("EXCEPTION: GENERAL PROTECTION FAULT\n{:#?}", stack_frame);
     loop {
@@ -87,7 +87,7 @@ extern "x86-interrupt" fn gpf_handler(
 
 extern "x86-interrupt" fn double_fault_handler(
     stack_frame: InterruptStackFrame,
-    error_code: u64,
+    _error_code: u64,
 ) -> ! {
     panic!("EXCEPTION: DOUBLE FAULT\n{:#?}", stack_frame);
 }

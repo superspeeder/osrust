@@ -1,23 +1,37 @@
 use bootloader_api::BootInfo;
 use bootloader_api::info::{MemoryRegionKind, MemoryRegions};
-use lazy_static::lazy_static;
-use x86_64::structures::paging::{FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PhysFrame, RecursivePageTable, Size4KiB};
+use x86_64::structures::paging::{
+    FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PhysFrame, Size4KiB,
+};
 use x86_64::{PhysAddr, VirtAddr};
 
-pub unsafe fn init(boot_info: &BootInfo) -> OffsetPageTable<'static> {
+static mut PHYSICAL_OFFSET: VirtAddr = VirtAddr::new(0);
 
-    let physical_memory_offset = VirtAddr::new(
-        if let bootloader_api::info::Optional::Some(v) = boot_info.physical_memory_offset {
-            v
-        } else {
-            0
-        },
-    );
+pub unsafe fn init(boot_info: &BootInfo) -> OffsetPageTable<'static> {
+    unsafe {
+        PHYSICAL_OFFSET = VirtAddr::new(
+            if let bootloader_api::info::Optional::Some(v) = boot_info.physical_memory_offset {
+                v
+            } else {
+                0
+            },
+        );
+    }
 
     unsafe {
-        let level_4_table = active_level_4_table(physical_memory_offset);
-        OffsetPageTable::new(level_4_table, physical_memory_offset)
+        let level_4_table = active_level_4_table(PHYSICAL_OFFSET);
+        OffsetPageTable::new(level_4_table, PHYSICAL_OFFSET)
     }
+}
+
+#[inline]
+pub unsafe fn physical_pointer<T: Sized>(phys: PhysAddr) -> *mut T {
+    unsafe { (phys.as_u64() + PHYSICAL_OFFSET.as_u64()) as *mut T }
+}
+
+#[inline]
+pub unsafe fn physical_ref<T: Sized>(phys: PhysAddr) -> &'static mut T {
+    unsafe { &mut *physical_pointer(phys) }
 }
 
 unsafe fn active_level_4_table(physical_memory_offset: VirtAddr) -> &'static mut PageTable {
@@ -129,4 +143,3 @@ pub fn create_example_mapping(
     };
     map_to_result.expect("map_to failed").flush();
 }
-

@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use bootloader::BootConfig;
 
 fn main() {
     // set by cargo, build scripts should use this directory for output files
