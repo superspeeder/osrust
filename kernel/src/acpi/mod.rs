@@ -1,13 +1,15 @@
 use crate::memory;
-use acpi::{PciAddress, PhysicalMapping};
+use acpi::{Handle, PciAddress, PhysicalMapping};
 use bootloader_api::BootInfo;
 use core::intrinsics::{volatile_load, volatile_store};
 use core::ptr::NonNull;
+use acpi::aml::AmlError;
+use acpi::platform::{AcpiPlatform, PciConfigRegions};
 use log::{debug, info};
 use x86_64::instructions::port::{PortRead, PortWrite};
 use crate::logger::LoggedAddress;
 
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 struct AcpiHandler;
 
 impl acpi::Handler for AcpiHandler {
@@ -123,6 +125,18 @@ impl acpi::Handler for AcpiHandler {
     fn sleep(&self, milliseconds: u64) {
         todo!()
     }
+
+    fn create_mutex(&self) -> Handle {
+        todo!()
+    }
+
+    fn acquire(&self, mutex: Handle, timeout: u16) -> Result<(), AmlError> {
+        todo!()
+    }
+
+    fn release(&self, mutex: Handle) {
+        todo!()
+    }
 }
 
 pub fn init(boot_info: &'static BootInfo) {
@@ -135,5 +149,16 @@ pub fn init(boot_info: &'static BootInfo) {
             rsdp_addr,
         )
         .expect("Failed to parse ACPI tables.");
+
+        for (physical_address, header) in tables.table_headers() {
+            debug!("Found ACPI table: {:?}", header.signature.as_str());
+        }
+
+        debug!("ACPI Revision: {:?}", tables.rsdp_revision);
+
+        let platform_info = AcpiPlatform::new(tables, acpi_handler).unwrap();
+        debug!("ACPI Power Profile: {:?}", platform_info.power_profile);
+        platform_info.enter_acpi_mode().unwrap();
+        debug!("ACPI Enabled");
     }
 }

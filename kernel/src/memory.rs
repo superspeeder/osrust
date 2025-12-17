@@ -1,3 +1,4 @@
+use crate::logger::LoggedAddress;
 use bootloader_api::BootInfo;
 use bootloader_api::info::{MemoryRegionKind, MemoryRegions};
 use core::ops::Range;
@@ -7,11 +8,14 @@ use x86_64::structures::paging::{
     FrameAllocator, Mapper, OffsetPageTable, PageTable, PageTableFlags, PhysFrame, Size4KiB,
 };
 use x86_64::{PhysAddr, VirtAddr};
-use crate::logger::LoggedAddress;
 
 static mut PHYSICAL_OFFSET: VirtAddr = VirtAddr::new(0);
 static mut PAGE_TABLE: Option<OffsetPageTable<'static>> = None;
 static mut FRAME_ALLOCATOR: Option<BootInfoFrameAllocator> = None;
+
+pub fn mapper() -> &'static mut OffsetPageTable<'static> {
+    unsafe { PAGE_TABLE.as_mut().unwrap() }
+}
 
 pub fn init(boot_info: &'static BootInfo) {
     unsafe {
@@ -41,7 +45,11 @@ pub fn map_identity(range: Range<u64>) -> PhysFrameRangeInclusive {
                 PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
                 FRAME_ALLOCATOR.as_mut().unwrap(),
             ) {
-                debug!("Mapping 4KiB at {:?} -> {:?}", LoggedAddress::Physical(frame.start_address().as_u64()), LoggedAddress::Virtual(frame.start_address().as_u64()));
+                debug!(
+                    "Mapping 4KiB at {:?} -> {:?}",
+                    LoggedAddress::Physical(frame.start_address().as_u64()),
+                    LoggedAddress::Virtual(frame.start_address().as_u64())
+                );
                 mapped_frame.flush();
             }
         }
@@ -188,3 +196,7 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
 //     };
 //     map_to_result.expect("map_to failed").flush();
 // }
+
+pub fn frame_allocator() -> &'static mut BootInfoFrameAllocator {
+    unsafe { FRAME_ALLOCATOR.as_mut().unwrap() }
+}

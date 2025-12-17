@@ -16,5 +16,6 @@ lazy_static = { version = "1.5.0", default-features = false, features = ["spin_n
 spin = { version = "0.10.0", default-features = false, features = ["spin_mutex"]}
 pic8259 = "0.11.0"
 bytemuck = { version = "1.24.0", features = ["derive"] }
-acpi = { version = "6.0.1", default-features = false }
+acpi = { version = "6.0.1" }
 log = "0.4.29"
+linked_list_allocator = "0.10.5"

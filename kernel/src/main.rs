@@ -2,6 +2,9 @@
 #![no_std] // don't link the Rust standard library
 #![no_main] // disable all Rust-level entry points
 
+extern crate alloc;
+
+use alloc::boxed::Box;
 use kernel::{debug_utils::SERIAL, init, println};
 
 use bootloader_api::config::Mapping;
@@ -20,6 +23,8 @@ entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     init(boot_info);
 
+    let heap_value = Box::new(41);
+    println!("heap_value at {:p}", heap_value);
 
     loop {
         hlt();

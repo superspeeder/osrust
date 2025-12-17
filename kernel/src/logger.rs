@@ -38,7 +38,7 @@ impl log::Log for SerialLogger {
         unsafe { LOGGER_ALIGNMENT = alignment; }
 
         println!(
-            "\x1b[0;90m[{level_color}\x1b[1m{level:<5}\x1b[0;90m]\x1b[0;1;97m {module_path:<alignment$} \x1b[0;90m>\x1b[0;97m {args}\x1b[0m",
+            "\x1b[0;2;37m[{level_color}\x1b[1m{level:<5}\x1b[0;2;37m]\x1b[0;1;97m {module_path:<alignment$} \x1b[0;2;37m>\x1b[0;97m {args}\x1b[0m",
             module_path = module_path,
             level_color = colorfor(record.level()),
             level = record.level(),

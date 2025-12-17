@@ -17,6 +17,7 @@ pub mod gdt;
 pub mod interrupts;
 mod logger;
 pub mod memory;
+pub mod allocator;
 
 pub fn init(boot_info: &'static BootInfo) {
     unsafe { log::set_logger_racy(&logger::LOGGER).expect("Failed to configure logger") };
@@ -31,6 +32,8 @@ pub fn init(boot_info: &'static BootInfo) {
     x86_64::instructions::interrupts::enable();
 
     memory::init(boot_info);
+    allocator::init_heap(memory::mapper(), memory::frame_allocator());
+
     acpi::init(boot_info);
 
     info!("Kernel initialized");
