@@ -1,6 +1,7 @@
 pub mod pit;
 
 use lazy_static::lazy_static;
+use log::{error, info};
 use pic8259::ChainedPics;
 use x86_64::instructions::hlt;
 use x86_64::instructions::port::PortWrite;
@@ -43,46 +44,42 @@ lazy_static! {
 
 pub fn init_idt() {
     IDT.load();
+    info!("Initialized IDT");
 }
 
 pub fn init_pics() {
-    // unsafe { PICS.lock().initialize() };
-    unsafe {
-        u8::write_to_port(0x20, 0x11);
-        u8::write_to_port(0xA0, 0x11);
-        u8::write_to_port(0x21, 0x20);
-        u8::write_to_port(0xA1, 0x28);
-        u8::write_to_port(0x21, 0x04);
-        u8::write_to_port(0xA1, 0x02);
-        u8::write_to_port(0x21, 0x01);
-        u8::write_to_port(0xA1, 0x01);
-        u8::write_to_port(0x21, 0x0);
-        u8::write_to_port(0xA1, 0x0);
-    }
+    unsafe { PICS.lock().initialize() };
+    // unsafe {
+    //     u8::write_to_port(0x20, 0x11);
+    //     u8::write_to_port(0xA0, 0x11);
+    //     u8::write_to_port(0x21, 0x20);
+    //     u8::write_to_port(0xA1, 0x28);
+    //     u8::write_to_port(0x21, 0x04);
+    //     u8::write_to_port(0xA1, 0x02);
+    //     u8::write_to_port(0x21, 0x01);
+    //     u8::write_to_port(0xA1, 0x01);
+    //     u8::write_to_port(0x21, 0x0);
+    //     u8::write_to_port(0xA1, 0x0);
+    // }
+    info!("Mapped PIC");
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
-    println!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);
+    error!("BREAKPOINT\n{:#?}", stack_frame);
 }
 
 extern "x86-interrupt" fn page_fault_handler(
     stack_frame: InterruptStackFrame,
     _error_code: PageFaultErrorCode,
 ) {
-    println!("EXCEPTION: PAGE FAULT AT 0x{:016X}\n{:#?}", Cr2::read_raw(), stack_frame);
-    loop {
-        hlt();
-    }
+    panic!("PAGE FAULT AT 0x{:016X}\n{:#?}", Cr2::read_raw(), stack_frame);
 }
 
 extern "x86-interrupt" fn gpf_handler(
     stack_frame: InterruptStackFrame,
     _error_code: u64,
 ) {
-    println!("EXCEPTION: GENERAL PROTECTION FAULT\n{:#?}", stack_frame);
-    loop {
-        hlt();
-    }
+    panic!("GENERAL PROTECTION FAULT\n{:#?}", stack_frame);
 }
 
 extern "x86-interrupt" fn double_fault_handler(

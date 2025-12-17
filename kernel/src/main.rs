@@ -18,7 +18,6 @@ pub static BOOTLOADER_CONFIG: BootloaderConfig = {
 entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
-    println!("Entered kernel with boot info: {boot_info:?}");
     init(boot_info);
 
 
@@ -30,7 +29,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 /// This function is called on panic.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let _ = writeln!(SERIAL.lock(), "PANIC: {info}");
+    let _ = writeln!(SERIAL.lock(), "\x1b[0;91mPANIC: {info}\x1b[0m");
     loop {
         hlt();
     }

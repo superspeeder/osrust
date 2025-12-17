@@ -1,38 +1,82 @@
 use bootloader_api::BootInfo;
 use bootloader_api::info::{MemoryRegionKind, MemoryRegions};
+use core::ops::Range;
+use log::{debug, info};
+use x86_64::structures::paging::frame::{PhysFrameRange, PhysFrameRangeInclusive};
 use x86_64::structures::paging::{
-    FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PhysFrame, Size4KiB,
+    FrameAllocator, Mapper, OffsetPageTable, PageTable, PageTableFlags, PhysFrame, Size4KiB,
 };
 use x86_64::{PhysAddr, VirtAddr};
+use crate::logger::LoggedAddress;
 
 static mut PHYSICAL_OFFSET: VirtAddr = VirtAddr::new(0);
+static mut PAGE_TABLE: Option<OffsetPageTable<'static>> = None;
+static mut FRAME_ALLOCATOR: Option<BootInfoFrameAllocator> = None;
 
-pub unsafe fn init(boot_info: &BootInfo) -> OffsetPageTable<'static> {
+pub fn init(boot_info: &'static BootInfo) {
     unsafe {
-        PHYSICAL_OFFSET = VirtAddr::new(
-            if let bootloader_api::info::Optional::Some(v) = boot_info.physical_memory_offset {
-                v
-            } else {
-                0
-            },
-        );
+        PHYSICAL_OFFSET =
+            VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap_or(0));
+        info!("Physical Memory Offset: {:?}", PHYSICAL_OFFSET);
+        PAGE_TABLE = Some(OffsetPageTable::new(
+            active_level_4_table(PHYSICAL_OFFSET),
+            PHYSICAL_OFFSET,
+        ));
+        FRAME_ALLOCATOR = Some(BootInfoFrameAllocator::init(&boot_info.memory_regions));
+        info!("Initialized Page Table");
+        // <dyn Mapper<Size2MiB>>::map_to(PAGE_TABLE.as_mut().unwrap_unchecked(), Page::containing_address(VirtAddr::new(0)), PhysFrame::containing_address());
+    }
+}
+
+pub fn map_identity(range: Range<u64>) -> PhysFrameRangeInclusive {
+    let range = PhysFrame::range_inclusive(
+        PhysFrame::containing_address(PhysAddr::new(range.start)),
+        PhysFrame::containing_address(PhysAddr::new(range.end - 1)),
+    ); // avoid mapping an extra frame when it's not necessary
+
+    for frame in range {
+        unsafe {
+            if let Ok(mapped_frame) = PAGE_TABLE.as_mut().unwrap().identity_map(
+                frame,
+                PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+                FRAME_ALLOCATOR.as_mut().unwrap(),
+            ) {
+                debug!("Mapping 4KiB at {:?} -> {:?}", LoggedAddress::Physical(frame.start_address().as_u64()), LoggedAddress::Virtual(frame.start_address().as_u64()));
+                mapped_frame.flush();
+            }
+        }
     }
 
-    unsafe {
-        let level_4_table = active_level_4_table(PHYSICAL_OFFSET);
-        OffsetPageTable::new(level_4_table, PHYSICAL_OFFSET)
-    }
+    range
 }
 
-#[inline]
-pub unsafe fn physical_pointer<T: Sized>(phys: PhysAddr) -> *mut T {
-    unsafe { (phys.as_u64() + PHYSICAL_OFFSET.as_u64()) as *mut T }
-}
-
-#[inline]
-pub unsafe fn physical_ref<T: Sized>(phys: PhysAddr) -> &'static mut T {
-    unsafe { &mut *physical_pointer(phys) }
-}
+// pub unsafe fn init(boot_info: &BootInfo) -> OffsetPageTable<'static> {
+//     unsafe {
+//         PHYSICAL_OFFSET = VirtAddr::new(
+//             if let bootloader_api::info::Optional::Some(v) = boot_info.physical_memory_offset {
+//                 v
+//             } else {
+//                 0
+//             },
+//         );
+//     }
+//
+//     unsafe {
+//         let level_4_table = active_level_4_table(PHYSICAL_OFFSET);
+//         OffsetPageTable::new(level_4_table, PHYSICAL_OFFSET)
+//     }
+// }
+//
+// #[inline]
+// pub unsafe fn physical_pointer<T: Sized>(phys: PhysAddr) -> *mut T {
+//     unsafe { (phys.as_u64() + PHYSICAL_OFFSET.as_u64()) as *mut T }
+// }
+//
+// #[inline]
+// pub unsafe fn physical_ref<T: Sized>(phys: PhysAddr) -> &'static mut T {
+//     unsafe { &mut *physical_pointer(phys) }
+// }
+//
 
 unsafe fn active_level_4_table(physical_memory_offset: VirtAddr) -> &'static mut PageTable {
     use x86_64::registers::control::Cr3;
@@ -46,46 +90,47 @@ unsafe fn active_level_4_table(physical_memory_offset: VirtAddr) -> &'static mut
     unsafe { &mut *page_table_ptr }
 }
 
-pub unsafe fn translate_addr(addr: VirtAddr, physical_memory_offset: VirtAddr) -> Option<PhysAddr> {
-    translate_addr_inner(addr, physical_memory_offset)
-}
+//
+// pub unsafe fn translate_addr(addr: VirtAddr, physical_memory_offset: VirtAddr) -> Option<PhysAddr> {
+//     translate_addr_inner(addr, physical_memory_offset)
+// }
+//
+// fn translate_addr_inner(addr: VirtAddr, physical_memory_offset: VirtAddr) -> Option<PhysAddr> {
+//     use x86_64::registers::control::Cr3;
+//     use x86_64::structures::paging::page_table::FrameError;
+//
+//     // read the active level 4 frame from the CR3 register
+//     let (level_4_table_frame, _) = Cr3::read();
+//
+//     let table_indexes = [
+//         addr.p4_index(),
+//         addr.p3_index(),
+//         addr.p2_index(),
+//         addr.p1_index(),
+//     ];
+//     let mut frame = level_4_table_frame;
+//
+//     // traverse the multi-level page table
+//     for &index in &table_indexes {
+//         // convert the frame into a page table reference
+//         let virt = physical_memory_offset + frame.start_address().as_u64();
+//         let table_ptr: *const PageTable = virt.as_ptr();
+//         let table = unsafe { &*table_ptr };
+//
+//         // read the page table entry and update `frame`
+//         let entry = &table[index];
+//         frame = match entry.frame() {
+//             Ok(frame) => frame,
+//             Err(FrameError::FrameNotPresent) => return None,
+//             Err(FrameError::HugeFrame) => panic!("huge pages not supported"),
+//         };
+//     }
+//
+//     // calculate the physical address by adding the page offset
+//     Some(frame.start_address() + u64::from(addr.page_offset()))
+// }
 
-fn translate_addr_inner(addr: VirtAddr, physical_memory_offset: VirtAddr) -> Option<PhysAddr> {
-    use x86_64::registers::control::Cr3;
-    use x86_64::structures::paging::page_table::FrameError;
-
-    // read the active level 4 frame from the CR3 register
-    let (level_4_table_frame, _) = Cr3::read();
-
-    let table_indexes = [
-        addr.p4_index(),
-        addr.p3_index(),
-        addr.p2_index(),
-        addr.p1_index(),
-    ];
-    let mut frame = level_4_table_frame;
-
-    // traverse the multi-level page table
-    for &index in &table_indexes {
-        // convert the frame into a page table reference
-        let virt = physical_memory_offset + frame.start_address().as_u64();
-        let table_ptr: *const PageTable = virt.as_ptr();
-        let table = unsafe { &*table_ptr };
-
-        // read the page table entry and update `frame`
-        let entry = &table[index];
-        frame = match entry.frame() {
-            Ok(frame) => frame,
-            Err(FrameError::FrameNotPresent) => return None,
-            Err(FrameError::HugeFrame) => panic!("huge pages not supported"),
-        };
-    }
-
-    // calculate the physical address by adding the page offset
-    Some(frame.start_address() + u64::from(addr.page_offset()))
-}
-
-/// A FrameAllocator that returns usable frames from the bootloader's memory map.
+// A FrameAllocator that returns usable frames from the bootloader's memory map.
 pub struct BootInfoFrameAllocator {
     memory_map: &'static MemoryRegions,
     next: usize,
@@ -126,20 +171,20 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     }
 }
 
-/// Creates an example mapping for the given page to frame `0xb8000`.
-pub fn create_example_mapping(
-    page: Page,
-    mapper: &mut OffsetPageTable,
-    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
-) {
-    use x86_64::structures::paging::PageTableFlags as Flags;
-
-    let frame = PhysFrame::containing_address(PhysAddr::new(0xb8000));
-    let flags = Flags::PRESENT | Flags::WRITABLE;
-
-    let map_to_result = unsafe {
-        // FIXME: this is not safe, we do it only for testing
-        mapper.map_to(page, frame, flags, frame_allocator)
-    };
-    map_to_result.expect("map_to failed").flush();
-}
+// /// Creates an example mapping for the given page to frame `0xb8000`.
+// pub fn create_example_mapping(
+//     page: Page,
+//     mapper: &mut OffsetPageTable,
+//     frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+// ) {
+//     use x86_64::structures::paging::PageTableFlags as Flags;
+//
+//     let frame = PhysFrame::containing_address(PhysAddr::new(0xb8000));
+//     let flags = Flags::PRESENT | Flags::WRITABLE;
+//
+//     let map_to_result = unsafe {
+//         // FIXME: this is not safe, we do it only for testing
+//         mapper.map_to(page, frame, flags, frame_allocator)
+//     };
+//     map_to_result.expect("map_to failed").flush();
+// }

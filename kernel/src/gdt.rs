@@ -1,6 +1,7 @@
 #![allow(unused_unsafe)]
 
 use lazy_static::lazy_static;
+use log::info;
 use x86_64::VirtAddr;
 use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
 use x86_64::structures::tss::TaskStateSegment;
@@ -52,4 +53,5 @@ pub fn init() {
         CS::set_reg(GDT.1.code_selector);
         load_tss(GDT.1.tss_selector);
     }
+    info!("Loaded GDT");
 }
