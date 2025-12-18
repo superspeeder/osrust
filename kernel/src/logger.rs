@@ -1,5 +1,6 @@
 use core::fmt::{Debug, Formatter};
 use log::{Level, Record};
+use x86_64::{PhysAddr, VirtAddr};
 
 pub(super) struct SerialLogger;
 
@@ -65,5 +66,27 @@ impl Debug for LoggedAddress {
                 f.write_fmt(format_args!("\x1b[0;95;4m0x{:016x}\x1b[0;97m", addr))
             }
         }
+    }
+}
+
+pub trait IntoLoggedAddress {
+    fn into_log(self) -> LoggedAddress;
+}
+
+impl<T> IntoLoggedAddress for T where T: Into<LoggedAddress> {
+    fn into_log(self) -> LoggedAddress {
+        self.into()
+    }
+}
+
+impl Into<LoggedAddress> for VirtAddr {
+    fn into(self) -> LoggedAddress {
+        LoggedAddress::Virtual(self.as_u64())
+    }
+}
+
+impl Into<LoggedAddress> for PhysAddr {
+    fn into(self) -> LoggedAddress {
+        LoggedAddress::Physical(self.as_u64())
     }
 }

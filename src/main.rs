@@ -35,7 +35,8 @@ fn main() {
     cmd.arg("-device")
         .arg("isa-debug-exit,iobase=0xf4,iosize=0x04");
     // cmd.arg("-enable-kvm");
-    // cmd.arg("-cpu").arg("qemu64");
+    cmd.arg("-cpu").arg("qemu64");
+    cmd.arg("-machine").arg("q35");
     cmd.arg("-m").arg("8G");
 
     if uefi {

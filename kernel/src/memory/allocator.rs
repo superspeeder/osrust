@@ -3,6 +3,8 @@ use x86_64::structures::paging::{FrameAllocator, Mapper, Page, PageTableFlags, S
 use x86_64::structures::paging::mapper::MapToError;
 use x86_64::VirtAddr;
 
+pub mod buddy_allocator;
+
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 

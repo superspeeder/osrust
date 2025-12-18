@@ -1,13 +1,21 @@
-use crate::logger::LoggedAddress;
+pub mod frame_allocator;
+pub mod allocator;
+
+use core::iter::TrustedRandomAccessNoCoerce;
+use crate::logger::{IntoLoggedAddress, LoggedAddress};
 use bootloader_api::BootInfo;
 use bootloader_api::info::{MemoryRegionKind, MemoryRegions};
 use core::ops::Range;
-use log::{debug, info};
+use log::{debug, info, trace, warn};
 use x86_64::structures::paging::frame::{PhysFrameRange, PhysFrameRangeInclusive};
+use x86_64::structures::paging::mapper::{CleanUp, MapToError, MapperFlush};
+use x86_64::structures::paging::page_table::PageTableLevel;
 use x86_64::structures::paging::{
-    FrameAllocator, Mapper, OffsetPageTable, PageTable, PageTableFlags, PhysFrame, Size4KiB,
+    FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size1GiB,
+    Size2MiB, Size4KiB,
 };
 use x86_64::{PhysAddr, VirtAddr};
+use crate::memory::frame_allocator::boot_info::BootInfoFrameAllocator;
 
 static mut PHYSICAL_OFFSET: VirtAddr = VirtAddr::new(0);
 static mut PAGE_TABLE: Option<OffsetPageTable<'static>> = None;
@@ -37,25 +45,147 @@ pub fn init(boot_info: &'static BootInfo) {
     }
 }
 
+// This function is unsafe because it expects that it is safe to remove any page mapping in the given range.
+pub unsafe fn force_map_region(start: VirtAddr, physical_range: Range<u64>) {
+    unsafe {
+        // mapper().clean_up_addr_range()
+    }
+}
+
+pub fn map_region(start: VirtAddr, physical_range: Range<u64>) {
+    let mut cursor: u64 = 0;
+    while cursor < physical_range.size() as u64 {
+        // if the cursor is part of the first 4KiB of a 1GiB huge page and the requested range is at least 1 GiB, map the huge page.
+        if (start.as_u64() + cursor) & 0x3ffff000 == 0 && physical_range.size() >= 0x40000000 {
+            let virt_cursor = VirtAddr::new(start.as_u64() + cursor);
+            let phys_cursor = PhysAddr::new(physical_range.start + cursor);
+            unsafe {
+                let page = Page::<Size1GiB>::containing_address(virt_cursor);
+                let frame = PhysFrame::<Size1GiB>::containing_address(phys_cursor);
+
+                // The page is already mapped as expected
+                if let Ok(frame) = mapper().translate_page(page) && frame.start_address() == phys_cursor {
+                    continue;
+                }
+
+                // Attempt to map a 1GiB page
+                match mapper().map_to(
+                    page,
+                    frame,
+                    PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::HUGE_PAGE,
+                    frame_allocator::frame_allocator(),
+                ) {
+                    Ok(mapped_frame) => {
+                        trace!(
+                            "Mapped 1GiB at {:?} -> {:?}",
+                            page.start_address().into_log(),
+                            frame.start_address().into_log(),
+                        );
+                        continue;
+                    }
+                    Err(MapToError::FrameAllocationFailed) => {
+                        panic!("Failed to allocate frame for page tables");
+                    }
+                    Err(MapToError::PageAlreadyMapped(existing_frame)) => {
+                        if existing_frame.start_address() != frame.start_address() {
+                            panic!(
+                                "Cannot identity map page at {:?}, already mapped to different address {:?}",
+                                LoggedAddress::Virtual(frame.start_address().as_u64()),
+                                LoggedAddress::Physical(existing_frame.start_address().as_u64())
+                            )
+                        } else {
+                            trace!(
+                                "Not mapping page at {:?}: Already mapped.",
+                                LoggedAddress::Virtual(frame.start_address().as_u64())
+                            )
+                        }
+                    }
+                    Err(MapToError::ParentEntryHugePage) => {
+                        panic!(
+                            "Physical memory mapper believes that you can have a 512GiB wide page, this is not true and indicates some deeper issue with the kernel."
+                        );
+                    }
+                }
+            }
+        }
+
+        if (start.as_u64() + cursor) & 0x1fffff == 0 && physical_range.size() >= 0x200000 {
+            let virt_cursor = VirtAddr::new(start.as_u64() + cursor);
+            let phys_cursor = PhysAddr::new(physical_range.start + cursor);
+            unsafe {
+                let page = Page::<Size2MiB>::containing_address(virt_cursor);
+                let frame = PhysFrame::<Size2MiB>::containing_address(phys_cursor);
+                match mapper().map_to(
+                    page,
+                    frame,
+                    PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::HUGE_PAGE,
+                    frame_allocator::frame_allocator(),
+                ) {
+                    Ok(mapped_frame) => {
+                        trace!(
+                            "Mapped 2MiB at {:?} -> {:?}",
+                            page.start_address().into_log(),
+                            frame.start_address().into_log(),
+                        );
+                    }
+                    _ => todo!(),
+                }
+            }
+        }
+    }
+}
+
 pub fn map_identity(range: Range<u64>) -> PhysFrameRangeInclusive {
     let range = PhysFrame::range_inclusive(
         PhysFrame::containing_address(PhysAddr::new(range.start)),
         PhysFrame::containing_address(PhysAddr::new(range.end - 1)),
     ); // avoid mapping an extra frame when it's not necessary
+    trace!(
+        "Identity mapping range {:?}:{:?}",
+        LoggedAddress::Physical(range.start.start_address().as_u64()),
+        LoggedAddress::Physical(range.end.start_address().as_u64() + range.end.size())
+    );
 
     for frame in range {
         unsafe {
-            if let Ok(mapped_frame) = PAGE_TABLE.as_mut().unwrap().identity_map(
+            match PAGE_TABLE.as_mut().unwrap().identity_map(
                 frame,
                 PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
                 FRAME_ALLOCATOR.as_mut().unwrap(),
             ) {
-                debug!(
-                    "Mapping 4KiB at {:?} -> {:?}",
-                    LoggedAddress::Physical(frame.start_address().as_u64()),
-                    LoggedAddress::Virtual(frame.start_address().as_u64())
-                );
-                mapped_frame.flush();
+                Ok(mapped_frame) => {
+                    trace!(
+                        "Mapping 4KiB at {:?} -> {:?}",
+                        LoggedAddress::Physical(frame.start_address().as_u64()),
+                        LoggedAddress::Virtual(frame.start_address().as_u64())
+                    );
+                    mapped_frame.flush();
+                }
+                Err(e) => match e {
+                    MapToError::FrameAllocationFailed => {
+                        panic!("Failed to allocate frame for page tables");
+                    }
+                    MapToError::ParentEntryHugePage => {
+                        warn!(
+                            "Not mapping page at {:?}: Included in mapped huge page (unknown if mapping is correct).",
+                            LoggedAddress::Virtual(frame.start_address().as_u64())
+                        )
+                    }
+                    MapToError::PageAlreadyMapped(existing_frame) => {
+                        if existing_frame.start_address() != frame.start_address() {
+                            panic!(
+                                "Cannot identity map page at {:?}, already mapped to different address {:?}",
+                                LoggedAddress::Virtual(frame.start_address().as_u64()),
+                                LoggedAddress::Physical(existing_frame.start_address().as_u64())
+                            )
+                        } else {
+                            trace!(
+                                "Not mapping page at {:?}: Already mapped.",
+                                LoggedAddress::Virtual(frame.start_address().as_u64())
+                            )
+                        }
+                    }
+                },
             }
         }
     }
@@ -103,86 +233,6 @@ unsafe fn active_level_4_table(physical_memory_offset: VirtAddr) -> &'static mut
     unsafe { &mut *page_table_ptr }
 }
 
-//
-// pub unsafe fn translate_addr(addr: VirtAddr, physical_memory_offset: VirtAddr) -> Option<PhysAddr> {
-//     translate_addr_inner(addr, physical_memory_offset)
-// }
-//
-// fn translate_addr_inner(addr: VirtAddr, physical_memory_offset: VirtAddr) -> Option<PhysAddr> {
-//     use x86_64::registers::control::Cr3;
-//     use x86_64::structures::paging::page_table::FrameError;
-//
-//     // read the active level 4 frame from the CR3 register
-//     let (level_4_table_frame, _) = Cr3::read();
-//
-//     let table_indexes = [
-//         addr.p4_index(),
-//         addr.p3_index(),
-//         addr.p2_index(),
-//         addr.p1_index(),
-//     ];
-//     let mut frame = level_4_table_frame;
-//
-//     // traverse the multi-level page table
-//     for &index in &table_indexes {
-//         // convert the frame into a page table reference
-//         let virt = physical_memory_offset + frame.start_address().as_u64();
-//         let table_ptr: *const PageTable = virt.as_ptr();
-//         let table = unsafe { &*table_ptr };
-//
-//         // read the page table entry and update `frame`
-//         let entry = &table[index];
-//         frame = match entry.frame() {
-//             Ok(frame) => frame,
-//             Err(FrameError::FrameNotPresent) => return None,
-//             Err(FrameError::HugeFrame) => panic!("huge pages not supported"),
-//         };
-//     }
-//
-//     // calculate the physical address by adding the page offset
-//     Some(frame.start_address() + u64::from(addr.page_offset()))
-// }
-
-// A FrameAllocator that returns usable frames from the bootloader's memory map.
-pub struct BootInfoFrameAllocator {
-    memory_map: &'static MemoryRegions,
-    next: usize,
-}
-
-impl BootInfoFrameAllocator {
-    /// Create a FrameAllocator from the passed memory map.
-    ///
-    /// This function is unsafe because the caller must guarantee that the passed
-    /// memory map is valid. The main requirement is that all frames that are marked
-    /// as `USABLE` in it are really unused.
-    pub unsafe fn init(memory_map: &'static MemoryRegions) -> Self {
-        BootInfoFrameAllocator {
-            memory_map,
-            next: 0,
-        }
-    }
-
-    /// Returns an iterator over the usable frames specified in the memory map.
-    fn usable_frames(&self) -> impl Iterator<Item = PhysFrame> {
-        // get usable regions from memory map
-        let regions = self.memory_map.iter();
-        let usable_regions = regions.filter(|r| r.kind == MemoryRegionKind::Usable);
-        // map each region to its address range
-        let addr_ranges = usable_regions.map(|r| r.start..r.end);
-        // transform to an iterator of frame start addresses
-        let frame_addresses = addr_ranges.flat_map(|r| r.step_by(4096));
-        // create `PhysFrame` types from the start addresses
-        frame_addresses.map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
-    }
-}
-
-unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
-    fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        let frame = self.usable_frames().nth(self.next);
-        self.next += 1;
-        frame
-    }
-}
 
 // /// Creates an example mapping for the given page to frame `0xb8000`.
 // pub fn create_example_mapping(
@@ -202,6 +252,3 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
 //     map_to_result.expect("map_to failed").flush();
 // }
 
-pub fn frame_allocator() -> &'static mut BootInfoFrameAllocator {
-    unsafe { FRAME_ALLOCATOR.as_mut().unwrap() }
-}
