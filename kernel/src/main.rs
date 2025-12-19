@@ -1,4 +1,5 @@
 #![feature(abi_x86_interrupt)]
+#![feature(core_intrinsics)]
 #![no_std] // don't link the Rust standard library
 #![no_main] // disable all Rust-level entry points
 
@@ -10,6 +11,7 @@ use kernel::{debug_utils::SERIAL, init, println};
 use bootloader_api::config::Mapping;
 use bootloader_api::{entry_point, BootInfo, BootloaderConfig};
 use core::fmt::Write;
+use core::intrinsics::volatile_store;
 use x86_64::instructions::hlt;
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
@@ -25,6 +27,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     let heap_value = Box::new(41);
     println!("heap_value at {:p}", heap_value);
+
+    unsafe {
+        volatile_store(kernel::memory::ERROR_ADDRESS as *mut u8, 14);
+    }
 
     loop {
         hlt();

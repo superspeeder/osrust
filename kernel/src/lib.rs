@@ -24,7 +24,7 @@ pub mod support;
 pub fn init(boot_info: &'static BootInfo) {
     unsafe { log::set_logger_racy(&logger::LOGGER).expect("Failed to configure logger") };
     unsafe { log::set_max_level_racy(log::LevelFilter::Trace) };
-    print!("\x1b[2J\x1b[H");
+    print!("\x1b[H\x1b[2J");
     info!("Initialized Logger");
 
     gdt::init();

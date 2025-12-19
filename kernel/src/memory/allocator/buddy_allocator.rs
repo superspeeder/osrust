@@ -6,6 +6,7 @@ pub struct Block {
 }
 
 #[repr(transparent)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct TreePointer(*mut u8);
 
 impl TreePointer {
@@ -28,6 +29,9 @@ impl TreePointer {
 
     pub fn is_free_to_allocate(&self, index: usize, total_layers: usize) -> bool {
         let layer = (index + 1).ilog2();
+        
+
+        todo!()
 
     }
 }
