@@ -129,8 +129,10 @@ impl<T: 'static> PagedPool<T> {
         }
     }
 
-    pub fn alloc(&mut self, page_allocator: &mut impl FrameAllocator<Size4KiB>) -> T {
-        unsafe { self.active_page.take_next(page_allocator) }
+    pub fn alloc(&mut self, page_allocator: &mut impl FrameAllocator<Size4KiB>) -> &'static mut T {
+        let (r, page) = unsafe { self.active_page.take_next(page_allocator) };
+        self.active_page = page;
+        r
     }
 }
 
@@ -150,7 +152,7 @@ impl<T: 'static> PoolAllocator<T> {
     pub fn alloc(
         &mut self,
         frame_allocator: &mut impl FrameAllocator<Size4KiB>,
-    ) -> &'static RawLinkedListNode<T> {
+    ) -> &'static mut RawLinkedListNode<T> {
         if let Some(node) = self.unused.pop_front() {
             node
         } else {

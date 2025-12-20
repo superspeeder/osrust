@@ -150,4 +150,77 @@ impl<T> RawLinkedList<T> {
             }
         }
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = &RawLinkedListNode<T>> {
+        if self.head.is_null() {
+            InvalidIter { _phantom: PhantomData }
+        } else {
+            LinkedListIter { node: &self.head }
+        }
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut RawLinkedListNode<T>> {
+        if self.head.is_null() {
+            InvalidIter { _phantom: PhantomData }
+        } else {
+            LinkedListMutIter { node: &mut self.head }
+        }
+    }
+
+    pub unsafe fn front(&self) -> &'static RawLinkedListNode<T> {
+        unsafe { &*self.head }
+    }
+
+    pub unsafe fn front_mut(&self) -> &'static mut RawLinkedListNode<T> {
+        unsafe { &mut *self.head }
+    }
+
+    pub unsafe fn end(&self) -> &'static RawLinkedListNode<T> {
+        unsafe { &*self.tail }
+    }
+
+    pub unsafe fn end_mut(&self) -> &'static mut RawLinkedListNode<T> {
+        unsafe { &mut *self.tail }
+    }
+}
+
+pub struct InvalidIter<T> {
+    _phantom: PhantomData<T>,
+}
+
+impl<T> Iterator for InvalidIter<T> {
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        None
+    }
+}
+
+pub struct LinkedListIter<'a, T: 'static> {
+    node: &'a RawLinkedListNode<T>,
+}
+
+impl<'a, T: 'static> Iterator for LinkedListIter<'a, T> {
+    type Item = &'a RawLinkedListNode<T>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.node.next.is_null() {
+            None
+        } else {
+            Some(unsafe { &*self.node.next })
+        }
+    }
+}
+
+pub struct LinkedListMutIter<'a, T: 'static> {
+    node: &'a RawLinkedListNode<T>,
+}
+
+impl<'a, T: 'static> Iterator for LinkedListMutIter<'a, T> {
+    type Item = &'a mut RawLinkedListNode<T>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.node.next.is_null() {
+            None
+        } else {
+            Some(unsafe { &mut *self.node.next })
+        }
+    }
 }

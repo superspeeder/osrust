@@ -1,9 +1,13 @@
 use crate::klib::linked_list::{RawLinkedList, RawLinkedListNode};
+use crate::memory::FRAME_ALLOCATOR;
 use crate::memory::allocator::paged_pool::{PagedPool, PoolAllocator};
 use crate::memory::frame_allocator::frame_allocator;
 use arrayvec::ArrayVec;
 use bitflags::bitflags;
 use bootloader_api::BootInfo;
+use bootloader_api::info::MemoryRegionKind;
+use core::cmp::min;
+use x86_64::PhysAddr;
 
 #[repr(C)]
 pub struct Block {
@@ -38,7 +42,7 @@ impl Block {
         }
     }
 
-    fn set_values(&mut self, start: *mut u8, size: u8, flags: BlockFlags) {
+    pub(self) fn set_values(&mut self, start: *mut u8, size: u8, flags: BlockFlags) {
         self.block_ptr = start;
         self.size = size;
         self.flags = flags;
@@ -75,10 +79,11 @@ impl Block {
         size: u8,
         node_allocator: &mut PoolAllocator<Block>,
     ) -> Option<&'static mut RawLinkedListNode<Block>> {
-        if self.flags.contains(BlockFlags::USED) {
+        let block = if self.flags.contains(BlockFlags::USED) {
             None
         } else if !(self.left.is_null() && self.right.is_null()) {
             if self.size == size {
+                self.flags |= BlockFlags::USED;
                 return Some(self);
             } else {
                 self.left
@@ -92,11 +97,17 @@ impl Block {
                 .or_else(|| self.right.get_block_of_size(size, node_allocator))
         } else {
             None
-        }
-    }
+        };
 
-    pub fn mark_used(&mut self) {
-        self.flags |= BlockFlags::USED;
+        if let Some(block) = block.as_ref() {
+            if (&*self.left).flags.contains(BlockFlags::USED)
+                && (&*self.right).flags.contains(BlockFlags::USED)
+            {
+                self.flags |= BlockFlags::USED;
+            }
+        }
+
+        block
     }
 
     /// This resets the current block.
@@ -124,13 +135,56 @@ pub struct BuddyAllocator {
 }
 
 impl BuddyAllocator {
-    pub fn new(boot_info: &'static BootInfo) -> Self {
+    pub fn new(boot_info: &'static BootInfo, skip_frames: usize) -> Self {
+        let first_open_frame = unsafe { FRAME_ALLOCATOR.unwrap_unchecked() }
+            .usable_frames()
+            .nth(skip_frames)
+            .map(|f| f.start_address())
+            .unwrap_or(PhysAddr::new(0));
+
+        let mut blocks = RawLinkedList::new();
+        let mut node_source = PoolAllocator::new(frame_allocator());
+
+        let regions = boot_info.memory_regions.iter().filter(|r| {
+            r.kind == MemoryRegionKind::Usable && r.start + r.end < first_open_frame.as_u64()
+        });
+
+        for region in regions {
+            let mut cursor = min(region.start, first_open_frame.as_u64());
+            while cursor < region.end {
+                if cursor & 0x3fffffff == 0 {
+                    // aligned to 1 GiB
+
+                    if region.end - cursor >= BUDDYALLOC_MAX_SIZE {
+                        let mut block_node = node_source.alloc(frame_allocator());
+                        block_node.set_values()
+                    }
+                } else if cursor & 0x1fffff == 0 {
+                    // aligned to 2MiB
+                }
+            }
+        }
+
         Self {
-            node_source: PoolAllocator::new(frame_allocator()),
+            node_source,
             boot_info,
-            blocks: RawLinkedList::new(),
+            blocks,
         }
     }
 
-    pub fn alloc(&mut self, size: u8) -> RawLinkedListNode<Block> {}
+    fn alloc_raw(&mut self, size: u8) -> &'static mut RawLinkedListNode<Block> {
+        for block in self.blocks.iter_mut() {
+            if let Some(allocation) =
+                unsafe { block.get_block_of_size(size, &mut self.node_source) }
+            {
+                return allocation;
+            }
+        }
+
+        panic!("Failed to allocate memory");
+    }
+
+    pub fn alloc(&mut self, size: usize) -> &'static mut RawLinkedListNode<Block> {
+        self.alloc_raw(size.bit_width() as u8)
+    }
 }
