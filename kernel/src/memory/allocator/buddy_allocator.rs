@@ -1,121 +1,136 @@
+use crate::klib::linked_list::{RawLinkedList, RawLinkedListNode};
+use crate::memory::allocator::paged_pool::{PagedPool, PoolAllocator};
+use crate::memory::frame_allocator::frame_allocator;
+use arrayvec::ArrayVec;
+use bitflags::bitflags;
+use bootloader_api::BootInfo;
+
 #[repr(C)]
 pub struct Block {
-    memory: *mut u8,
-    tree: TreePointer,
-    size: usize,
+    block_ptr: *mut u8,
+    left: *mut RawLinkedListNode<Block>,
+    right: *mut RawLinkedListNode<Block>,
+    size: u8,
+    flags: BlockFlags,
 }
 
-#[repr(transparent)]
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-pub struct TreePointer(*mut u8);
-
-impl TreePointer {
-    pub fn init(memory: *mut u8, block_size: usize, min_allocation: usize) -> Self {
-        let size = tree_size(block_size, min_allocation);
-        for i in 0..size {
-            unsafe {
-                *(memory.offset(i as isize)) = 0xFF;
-            }
-        }
-
-        Self(memory)
+bitflags! {
+    #[derive(Copy, Clone)]
+    pub struct BlockFlags: u8 {
+        const USED = 1;
     }
-
-    pub fn is_allocated_direct(&self, index: usize) -> bool {
-        let byte = index / 8;
-        let bit = index % 8;
-        unsafe { *self.0.offset(byte as isize) & (1 << bit) != 0 }
-    }
-
-    pub fn is_free_to_allocate(&self, index: usize, total_layers: usize) -> bool {
-        let layer = (index + 1).ilog2();
-        
-
-        todo!()
-
-    }
-}
-
-pub trait BlockAllocator {
-    fn allocate_block(&mut self) -> Block;
-}
-
-pub trait TreeAllocator {
-    fn allocate_tree(&mut self, block_size: usize) -> TreePointer;
 }
 
 impl Block {
-    pub fn memory_mut(&mut self) -> &'static mut [u8] {
-        unsafe {
-            core::slice::from_mut_ptr_range(
-                self.memory..self.memory.byte_offset(self.size as isize),
-            )
+    unsafe fn of(
+        block_ptr: *mut u8,
+        left: *mut RawLinkedListNode<Block>,
+        right: *mut RawLinkedListNode<Block>,
+        size: u8,
+        flags: BlockFlags,
+    ) -> Self {
+        Self {
+            block_ptr,
+            left,
+            right,
+            size,
+            flags,
         }
     }
 
-    pub fn tree(&self) -> TreePointer {
-        self.tree
+    fn set_values(&mut self, start: *mut u8, size: u8, flags: BlockFlags) {
+        self.block_ptr = start;
+        self.size = size;
+        self.flags = flags;
     }
 
-    pub fn size(&self) -> usize {
-        self.size
+    unsafe fn merge_children(&mut self, unused_list: &mut RawLinkedList<Block>) {
+        unsafe {
+            (*self.left).value.reset();
+            (*self.right).value.reset();
+            unused_list.append(&mut *self.left);
+            unused_list.append(&mut *self.right);
+            self.left = core::ptr::null_mut();
+            self.right = core::ptr::null_mut();
+        }
     }
 
-    pub fn allocate_segment(&mut self, size: usize) {
-        assert!(size <= self.size);
+    unsafe fn split(&mut self, node_allocator: &mut PoolAllocator<Block>) {
+        unsafe {
+            let mut left = node_allocator.alloc(frame_allocator());
+            left.set_values(self.block_ptr, self.size - 1, self.flags);
+            let mut right = node_allocator.alloc(frame_allocator());
+            right.set_values(
+                self.block_ptr.offset(1 << (self.size - 1)),
+                self.size - 1,
+                self.flags,
+            );
+            self.left = &raw mut *left;
+            self.right = &raw mut *right;
+        }
+    }
+
+    unsafe fn get_block_of_size(
+        self: &mut RawLinkedListNode<Self>,
+        size: u8,
+        node_allocator: &mut PoolAllocator<Block>,
+    ) -> Option<&'static mut RawLinkedListNode<Block>> {
+        if self.flags.contains(BlockFlags::USED) {
+            None
+        } else if !(self.left.is_null() && self.right.is_null()) {
+            if self.size == size {
+                return Some(self);
+            } else {
+                self.left
+                    .get_block_of_size(size, node_allocator)
+                    .or_else(|| self.right.get_block_of_size(size, node_allocator))
+            }
+        } else if self.size > size {
+            self.split(node_allocator);
+            self.left
+                .get_block_of_size(size, node_allocator)
+                .or_else(|| self.right.get_block_of_size(size, node_allocator))
+        } else {
+            None
+        }
+    }
+
+    pub fn mark_used(&mut self) {
+        self.flags |= BlockFlags::USED;
+    }
+
+    /// This resets the current block.
+    /// While the operation itself is not unsafe, using this may create unsafe conditions elsewhere.
+    /// This should only be used during block frees
+    fn reset(&mut self) {
+        self.block_ptr = core::ptr::null_mut();
+        self.left = core::ptr::null_mut();
+        self.right = core::ptr::null_mut();
+        self.size = 0;
+        self.flags = BlockFlags::empty();
     }
 }
 
-pub enum TreeAllocatorType<'a> {
-    ///
-    /// Places the tree at the end of a block
-    ///
-    Internal,
+const BUDDYALLOC_MAX_SIZE_LOG2: u8 = 30; // 1 GiB
+const BUDDYALLOC_MIN_SIZE_LOG2: u8 = 12; // 4 KiB
 
-    ///
-    /// A tree allocator which allocated memory for the trees outside the allocated blocks.
-    ///
-    /// The passed allocator is expected to use some form of dynamic allocation. If dynamic allocation is not available, use the [Internal] allocator type.
-    ///
-    External(&'a (dyn TreeAllocator + 'static)),
+pub const BUDDYALLOC_MAX_SIZE: u64 = 1 << BUDDYALLOC_MAX_SIZE_LOG2;
+pub const BUDDYALLOC_MIN_SIZE: u64 = 1 << BUDDYALLOC_MIN_SIZE_LOG2;
+
+pub struct BuddyAllocator {
+    node_source: PoolAllocator<Block>,
+    boot_info: &'static BootInfo,
+    blocks: RawLinkedList<Block>,
 }
 
-pub struct BuddyAllocator<'a, T: BlockAllocator> {
-    ///
-    /// Minimum allowed allocation size. This determines allocation alignment too.
-    ///
-    /// This must be a power of 2
-    ///
-    minimum_allocation_size: usize,
+impl BuddyAllocator {
+    pub fn new(boot_info: &'static BootInfo) -> Self {
+        Self {
+            node_source: PoolAllocator::new(frame_allocator()),
+            boot_info,
+            blocks: RawLinkedList::new(),
+        }
+    }
 
-    ///
-    /// Maximum size of a memory block
-    ///
-    /// This must be a power of 2
-    ///
-    maximum_block_size: usize,
-
-    ///
-    /// Allocation method for trees.
-    ///
-    tree_allocator: TreeAllocatorType<'a>,
-
-    ///
-    /// Allocator for memory blocks
-    ///
-    block_allocator: T,
-
-    ///
-    /// The actual blocks of memory
-    ///
-    blocks: [Block; 128],
-}
-
-const fn tree_size(block_size: usize, min_allocation_size: usize) -> usize {
-    debug_assert!(block_size & (block_size - 1) == 0);
-    debug_assert!(min_allocation_size & (min_allocation_size - 1) == 0);
-
-    let layer_count = block_size.ilog2() - min_allocation_size.ilog2();
-    debug_assert!(layer_count < 63);
-    1 << (layer_count - 2)
+    pub fn alloc(&mut self, size: u8) -> RawLinkedListNode<Block> {}
 }

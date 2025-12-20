@@ -3,6 +3,9 @@
 #![feature(core_intrinsics)]
 #![feature(trusted_random_access)]
 #![feature(slice_from_ptr_range)]
+#![feature(uint_bit_width)]
+#![feature(generic_const_exprs)]
+#![feature(deref_pure_trait)]
 #![allow(static_mut_refs)]
 #![allow(internal_features)]
 #![no_std] // don't link the Rust standard library
@@ -17,6 +20,7 @@ pub mod acpi;
 pub mod binutil;
 pub mod gdt;
 pub mod interrupts;
+mod klib;
 mod logger;
 pub mod memory;
 pub mod support;

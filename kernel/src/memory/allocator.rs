@@ -4,6 +4,7 @@ use x86_64::structures::paging::mapper::MapToError;
 use x86_64::VirtAddr;
 
 pub mod buddy_allocator;
+mod paged_pool;
 
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();

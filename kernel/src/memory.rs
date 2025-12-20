@@ -1,10 +1,12 @@
-pub mod frame_allocator;
 pub mod allocator;
+pub mod frame_allocator;
 
-use core::iter::TrustedRandomAccessNoCoerce;
 use crate::logger::{IntoLoggedAddress, LoggedAddress};
+use crate::memory::frame_allocator::boot_info::BootInfoFrameAllocator;
+use crate::memory::frame_allocator::frame_allocator;
 use bootloader_api::BootInfo;
 use bootloader_api::info::{MemoryRegionKind, MemoryRegions};
+use core::iter::TrustedRandomAccessNoCoerce;
 use core::ops::Range;
 use log::{debug, info, trace, warn};
 use x86_64::structures::paging::frame::{PhysFrameRange, PhysFrameRangeInclusive};
@@ -15,7 +17,6 @@ use x86_64::structures::paging::{
     Size2MiB, Size4KiB,
 };
 use x86_64::{PhysAddr, VirtAddr};
-use crate::memory::frame_allocator::boot_info::BootInfoFrameAllocator;
 
 static mut PHYSICAL_OFFSET: VirtAddr = VirtAddr::new(0);
 static mut PAGE_TABLE: Option<OffsetPageTable<'static>> = None;
@@ -64,7 +65,9 @@ pub fn map_region(start: VirtAddr, physical_range: Range<u64>) {
                 let frame = PhysFrame::<Size1GiB>::containing_address(phys_cursor);
 
                 // The page is already mapped as expected
-                if let Ok(frame) = mapper().translate_page(page) && frame.start_address() == phys_cursor {
+                if let Ok(frame) = mapper().translate_page(page)
+                    && frame.start_address() == phys_cursor
+                {
                     continue;
                 }
 
@@ -193,6 +196,35 @@ pub fn map_identity(range: Range<u64>) -> PhysFrameRangeInclusive {
     range
 }
 
+pub fn map_frame_identity(frame: PhysFrame) -> Page {
+    unsafe {
+        let res = mapper().identity_map(
+            frame,
+            PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+            frame_allocator(),
+        );
+        let page = Page::containing_address(VirtAddr::new(frame.start_address().as_u64()));
+        match res {
+            Ok(f) => f.flush(),
+            Err(MapToError::PageAlreadyMapped(o)) => {
+                if o.start_address() != frame.start_address() {
+                    panic!(
+                        "Page at {:?} already mapped to different frame ({:?})",
+                        page.start_address(),
+                        o.start_address().into_log()
+                    )
+                }
+            }
+            Err(e) => {
+                panic!("Error mapping page: {:?}", e);
+            }
+        }
+
+
+        page
+    }
+}
+
 // pub unsafe fn init(boot_info: &BootInfo) -> OffsetPageTable<'static> {
 //     unsafe {
 //         PHYSICAL_OFFSET = VirtAddr::new(
@@ -233,7 +265,6 @@ unsafe fn active_level_4_table(physical_memory_offset: VirtAddr) -> &'static mut
     unsafe { &mut *page_table_ptr }
 }
 
-
 // /// Creates an example mapping for the given page to frame `0xb8000`.
 // pub fn create_example_mapping(
 //     page: Page,
@@ -251,4 +282,3 @@ unsafe fn active_level_4_table(physical_memory_offset: VirtAddr) -> &'static mut
 //     };
 //     map_to_result.expect("map_to failed").flush();
 // }
-

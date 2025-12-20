@@ -20,3 +20,4 @@ acpi = { version = "6.0.1" }
 log = "0.4.29"
 linked_list_allocator = "0.10.5"
 bitflags = { version = "2.10.0", default-features = false, features = ["bytemuck"] }
+arrayvec = { version = "0.7.6", default-features = false }

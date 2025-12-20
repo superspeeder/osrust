@@ -1,3 +1,4 @@
+#![allow(internal_features)]
 #![feature(abi_x86_interrupt)]
 #![feature(core_intrinsics)]
 #![no_std] // don't link the Rust standard library
@@ -9,7 +10,7 @@ use alloc::boxed::Box;
 use kernel::{debug_utils::SERIAL, init, println};
 
 use bootloader_api::config::Mapping;
-use bootloader_api::{entry_point, BootInfo, BootloaderConfig};
+use bootloader_api::{BootInfo, BootloaderConfig, entry_point};
 use core::fmt::Write;
 use core::intrinsics::volatile_store;
 use x86_64::instructions::hlt;
