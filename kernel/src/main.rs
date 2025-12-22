@@ -29,10 +29,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let heap_value = Box::new(41);
     println!("heap_value at {:p}", heap_value);
 
-    unsafe {
-        volatile_store(kernel::memory::ERROR_ADDRESS as *mut u8, 14);
-    }
-
     loop {
         hlt();
     }

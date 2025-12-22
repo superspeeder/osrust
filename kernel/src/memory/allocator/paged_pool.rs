@@ -89,7 +89,7 @@ impl<T: 'static> PoolPage<T> {
     unsafe fn take_next(
         &mut self,
         page_allocator: &mut impl FrameAllocator<Size4KiB>,
-    ) -> (&mut MaybeUninit<T>, Self) {
+    ) -> (&'static mut MaybeUninit<T>, Self) {
         unsafe {
             let info = self.pool_info();
             if info.valid >= pool_size::<T>() as u16 {
@@ -105,6 +105,10 @@ impl<T: 'static> PoolPage<T> {
                 (self.take_next_unchecked(), self.clone())
             }
         }
+    }
+
+    unsafe fn next_page(&self) -> Self {
+        unsafe { self.pool_info().next.clone() }
     }
 }
 
@@ -131,8 +135,32 @@ impl<T: 'static> PagedPool<T> {
 
     pub fn alloc(&mut self, page_allocator: &mut impl FrameAllocator<Size4KiB>) -> &'static mut T {
         let (r, page) = unsafe { self.active_page.take_next(page_allocator) };
-        self.active_page = page;
-        r
+        self.active_page = page.clone();
+        unsafe { &mut *r.as_mut_ptr() }
+    }
+
+    pub fn iter_pages(&self) -> PagedPoolIterator<T> {
+        PagedPoolIterator {
+            page: self.first_page.clone(),
+        }
+    }
+}
+
+struct PagedPoolIterator<T: 'static> {
+    page: PoolPage<T>,
+}
+
+impl<T: 'static> Iterator for PagedPoolIterator<T> {
+    type Item = PoolPage<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let page = self.page.clone();
+        if page.is_null() {
+            None
+        } else {
+            self.page = unsafe { self.page.next_page() };
+            Some(page)
+        }
     }
 }
 
@@ -158,5 +186,9 @@ impl<T: 'static> PoolAllocator<T> {
         } else {
             self.page_alloc.alloc(frame_allocator)
         }
+    }
+
+    pub fn get_pool(&self) -> &PagedPool<RawLinkedListNode<T>> {
+        &self.page_alloc
     }
 }

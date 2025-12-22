@@ -34,7 +34,7 @@ lazy_static! {
         idt.general_protection_fault.set_handler_fn(gpf_handler);
 
         idt[32].set_handler_fn(timer_interrupt_handler);
-        for i in 33..48 {
+        for i in 32..48 {
             idt[i].set_handler_fn(nothing_isr);
         }
 
@@ -105,12 +105,14 @@ impl InterruptIndex {
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
     unsafe {
+        print!(".");
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }
 }
 
 extern "x86-interrupt" fn nothing_isr(_stack_frame: InterruptStackFrame) {
+    // print!("Int!");
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());

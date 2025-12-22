@@ -1,13 +1,15 @@
 use crate::klib::linked_list::{RawLinkedList, RawLinkedListNode};
 use crate::memory::FRAME_ALLOCATOR;
-use crate::memory::allocator::paged_pool::{PagedPool, PoolAllocator};
+use crate::memory::allocator::paged_pool::PoolAllocator;
 use crate::memory::frame_allocator::frame_allocator;
-use arrayvec::ArrayVec;
 use bitflags::bitflags;
 use bootloader_api::BootInfo;
 use bootloader_api::info::MemoryRegionKind;
 use core::cmp::min;
+use log::trace;
 use x86_64::PhysAddr;
+use x86_64::structures::paging::{FrameAllocator, PageSize, PhysFrame, Size1GiB, Size2MiB, Size4KiB};
+use crate::logger::IntoLoggedAddress;
 
 #[repr(C)]
 pub struct Block {
@@ -75,7 +77,7 @@ impl Block {
     }
 
     unsafe fn get_block_of_size(
-        self: &mut RawLinkedListNode<Self>,
+        self: &'static mut RawLinkedListNode<Self>,
         size: u8,
         node_allocator: &mut PoolAllocator<Block>,
     ) -> Option<&'static mut RawLinkedListNode<Block>> {
@@ -86,15 +88,15 @@ impl Block {
                 self.flags |= BlockFlags::USED;
                 return Some(self);
             } else {
-                self.left
+                (&mut *self.left)
                     .get_block_of_size(size, node_allocator)
-                    .or_else(|| self.right.get_block_of_size(size, node_allocator))
+                    .or_else(|| (&mut *self.right).get_block_of_size(size, node_allocator))
             }
         } else if self.size > size {
             self.split(node_allocator);
-            self.left
+            (&mut *self.left)
                 .get_block_of_size(size, node_allocator)
-                .or_else(|| self.right.get_block_of_size(size, node_allocator))
+                .or_else(|| (&mut *self.right).get_block_of_size(size, node_allocator))
         } else {
             None
         };
@@ -120,6 +122,41 @@ impl Block {
         self.size = 0;
         self.flags = BlockFlags::empty();
     }
+
+    pub fn contains_frame(&self, frame: PhysFrame) -> bool {
+        (self.block_ptr as u64) < frame.start_address().as_u64()
+            && frame.size().ilog2() <= self.size as u32
+    }
+
+    pub fn mark_frame_used(
+        &mut self,
+        frame: PhysFrame<Size4KiB>,
+        node_allocator: &mut PoolAllocator<Block>,
+    ) {
+        if self.size > 12 {
+            let offset = frame.start_address().as_u64() - (self.block_ptr as u64);
+            if offset < (1u64 << (self.size - 1)) {
+                // left
+                if self.left.is_null() {
+                    unsafe { self.split(node_allocator) }
+                }
+
+                unsafe { (&mut *self.left).mark_frame_used(frame, node_allocator) }
+            } else {
+                // right
+                if self.right.is_null() {
+                    unsafe { self.split(node_allocator) }
+                }
+
+                unsafe { (&mut *self.right).mark_frame_used(frame, node_allocator) }
+            }
+        }
+    }
+
+    pub fn frame<T: PageSize>(&self) -> PhysFrame<T> {
+        assert_eq!(self.size, T::SIZE.ilog2() as u8);
+        PhysFrame::containing_address(PhysAddr::new(self.block_ptr as u64))
+    }
 }
 
 const BUDDYALLOC_MAX_SIZE_LOG2: u8 = 30; // 1 GiB
@@ -135,15 +172,17 @@ pub struct BuddyAllocator {
 }
 
 impl BuddyAllocator {
-    pub fn new(boot_info: &'static BootInfo, skip_frames: usize) -> Self {
-        let first_open_frame = unsafe { FRAME_ALLOCATOR.unwrap_unchecked() }
+    pub fn new(boot_info: &'static BootInfo) -> Self {
+        let mut blocks: RawLinkedList<Block> = RawLinkedList::new();
+        let mut node_source: PoolAllocator<Block> = PoolAllocator::new(frame_allocator());
+
+        let first_open_frame = unsafe { FRAME_ALLOCATOR.as_mut().unwrap_unchecked() }
             .usable_frames()
-            .nth(skip_frames)
+            .nth(unsafe { FRAME_ALLOCATOR.as_ref().unwrap_unchecked().num_used() })
             .map(|f| f.start_address())
             .unwrap_or(PhysAddr::new(0));
 
-        let mut blocks = RawLinkedList::new();
-        let mut node_source = PoolAllocator::new(frame_allocator());
+        // TODO: mark used frames as used in the allocator
 
         let regions = boot_info.memory_regions.iter().filter(|r| {
             r.kind == MemoryRegionKind::Usable && r.start + r.end < first_open_frame.as_u64()
@@ -157,10 +196,40 @@ impl BuddyAllocator {
 
                     if region.end - cursor >= BUDDYALLOC_MAX_SIZE {
                         let mut block_node = node_source.alloc(frame_allocator());
-                        block_node.set_values()
+                        block_node.set_values(cursor as *mut u8, 30, BlockFlags::empty());
+                        cursor += 1 << 30;
                     }
                 } else if cursor & 0x1fffff == 0 {
                     // aligned to 2MiB
+                    if region.end - cursor >= 1 << 21 {
+                        let mut block_node = node_source.alloc(frame_allocator());
+                        block_node.set_values(cursor as *mut u8, 21, BlockFlags::empty());
+                        cursor += 1 << 21;
+                    }
+                } else if cursor & 0xfff == 0 {
+                    // aligned to 4KiB
+                    if region.end - cursor >= 1 << 12 {
+                        let mut block_node = node_source.alloc(frame_allocator());
+                        block_node.set_values(cursor as *mut u8, 12, BlockFlags::empty());
+                        cursor += 1 << 12;
+                    }
+                }
+            }
+        }
+
+        let mut counter = 0;
+        for frame in unsafe { FRAME_ALLOCATOR.as_ref().unwrap().usable_frames() } {
+            unsafe {
+                if counter > FRAME_ALLOCATOR.as_ref().unwrap().num_used() {
+                    break;
+                }
+            }
+
+            for block in blocks.iter_mut() {
+                if block.contains_frame(frame) {
+                    block.mark_frame_used(frame, &mut node_source);
+                    trace!("Reserved 4KiB frame {:?}", frame.start_address().into_log());
+                    break;
                 }
             }
         }
@@ -184,7 +253,29 @@ impl BuddyAllocator {
         panic!("Failed to allocate memory");
     }
 
+    #[inline]
     pub fn alloc(&mut self, size: usize) -> &'static mut RawLinkedListNode<Block> {
-        self.alloc_raw(size.bit_width() as u8)
+        self.alloc_raw((size - 1).bit_width() as u8)
+    }
+}
+
+unsafe impl FrameAllocator<Size4KiB> for BuddyAllocator {
+    fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
+        let node = self.alloc_raw(12);
+        Some(node.frame())
+    }
+}
+
+unsafe impl FrameAllocator<Size2MiB> for BuddyAllocator {
+    fn allocate_frame(&mut self) -> Option<PhysFrame<Size2MiB>> {
+        let node = self.alloc_raw(21);
+        Some(node.frame())
+    }
+}
+
+unsafe impl FrameAllocator<Size1GiB> for BuddyAllocator {
+    fn allocate_frame(&mut self) -> Option<PhysFrame<Size1GiB>> {
+        let node = self.alloc_raw(30);
+        Some(node.frame())
     }
 }

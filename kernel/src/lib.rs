@@ -4,8 +4,8 @@
 #![feature(trusted_random_access)]
 #![feature(slice_from_ptr_range)]
 #![feature(uint_bit_width)]
-#![feature(generic_const_exprs)]
 #![feature(deref_pure_trait)]
+#![feature(arbitrary_self_types)]
 #![allow(static_mut_refs)]
 #![allow(internal_features)]
 #![no_std] // don't link the Rust standard library
@@ -35,6 +35,7 @@ pub fn init(boot_info: &'static BootInfo) {
     memory::init(boot_info);
     memory::allocator::init_heap(memory::mapper(), memory::frame_allocator::frame_allocator())
         .expect("Failed to initialize heap");
+
     acpi::init(boot_info);
 
     interrupts::init_idt();

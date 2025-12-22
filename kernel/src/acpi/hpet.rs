@@ -1,4 +1,4 @@
-use core::intrinsics::volatile_load;
+use core::intrinsics::{volatile_load, volatile_store};
 
 use acpi::sdt::hpet::HpetTable;
 use log::info;
@@ -29,6 +29,8 @@ pub fn init() {
 
         HPET_BASE = hpet.base_address.address;
         memory::map_identity(HPET_BASE..HPET_BASE + 0xFF);
+
+        volatile_store((HPET_BASE + 0x010) as *mut u64, 1 << 1);
 
         info!("HPET Current Value: {:?}", poll_hpet());
     }

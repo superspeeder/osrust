@@ -20,7 +20,8 @@ pub fn init() {
     }
 
     unsafe {
-        x86_64::registers::model_specific::ApicBase::MSR.write(get_base());
+        info!("Apic Base: {:064b}", get_base());
+        x86_64::registers::model_specific::ApicBase::MSR.write(get_base() | 0x100);
         APIC_BASE = get_base();
         memory::map_identity(APIC_BASE..(APIC_BASE + 0x03F0));
 
